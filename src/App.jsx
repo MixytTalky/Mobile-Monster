@@ -127,7 +127,7 @@ if (finalImageName) {
           <feComposite in="matrixOut" in2="SourceGraphic" operator="in" />
         </filter>
       </svg>
-      <img src={`/pets/${finalImageName}.png`} 
+      <img src={`${import.meta.env.BASE_URL}pets/${finalImageName}.png`} 
            style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'url(#chromaKey)', imageRendering: 'pixelated' }} 
            alt={type} />
     </div>
