@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
 Home, Swords, BookOpen, Settings, Coins, Zap, Apple,
 ChevronLeft, Loader2, Search, Coffee, Trophy, Bluetooth,
@@ -8,9 +8,39 @@ TrendingUp, Trees, Wind, Waves, Sun, Castle, Map as MapIcon,
 Heart, Cloud, Mountain, Leaf, Moon, Play, Star, Gift, Send,
 History, User, Timer, Flame, ShieldAlert, PlusCircle
 } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, setLogLevel } from 'firebase/firestore';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+
+// --- Firebase 條件匯入（僅在有 __firebase_config 時使用）---
+let firebaseApp, firebaseDb, firebaseAuth;
+let fbInitialized = false;
+try {
+  if (typeof __firebase_config !== 'undefined') {
+    const { initializeApp } = await import('firebase/app');
+    const { getFirestore, setLogLevel } = await import('firebase/firestore');
+    const { getAuth, signInAnonymously, signInWithCustomToken } = await import('firebase/auth');
+    setLogLevel('error');
+    const config = JSON.parse(__firebase_config);
+    firebaseApp = initializeApp(config);
+    firebaseDb = getFirestore(firebaseApp);
+    firebaseAuth = getAuth(firebaseApp);
+    fbInitialized = true;
+  }
+} catch (e) {
+  console.warn('[冒險繪本] Firebase 未設定，使用本機存檔模式。', e);
+}
+
+// --- LocalStorage 存取工具 ---
+import { PET_DATABASE, getVariantMultiplier } from './gameConfig';
+
+const LS_KEY = 'legend-story-save';
+const lsLoad = () => {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+const lsSave = (data) => {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch {}
+};
 
 // --- 1. 資料數據庫 ---
 
@@ -36,38 +66,6 @@ desc: '等待時間 +1.5s, 閃避 +10%' },
 1.0, desc: '掛機收益 +30%, 等待 +1s' }
 };
 
-const PET_DATABASE = {
-'NEUTRAL': [{ no: '000', stage: 1, id: 'NEUTRAL_1', name: '初生豆', color: '#d1d5db', element: '一般', baseHp: 40, baseAtk:
-8, skills: ['STRIKE'] }],
-'FIRE': [
-{ no: '001', stage: 1, id: 'FIRE_1', name: '暖暖豆', color: '#fca5a5', element: '火', baseHp: 50, baseAtk: 15 },
-{ no: '002', stage: 2, id: 'FIRE_2', name: '焰尾犬', color: '#f87171', element: '火', baseHp: 130, baseAtk: 35 },
-{ no: '003', stage: 3, id: 'FIRE_3', name: '紅蓮使', color: '#ef4444', element: '火', baseHp: 320, baseAtk: 65 },
-{ no: '004', stage: 4, id: 'FIRE_4', name: '獄火龍', color: '#dc2626', element: '火', baseHp: 650, baseAtk: 140 },
-{ no: '005', stage: 5, id: 'FIRE_5', name: '煌鳳凰', color: '#b91c1c', element: '火', baseHp: 1300, baseAtk: 320 }
-],
-'WATER': [
-{ no: '011', stage: 1, id: 'WATER_1', name: '水滴兒', color: '#93c5fd', element: '水', baseHp: 60, baseAtk: 10 },
-{ no: '012', stage: 2, id: 'WATER_2', name: '波波龜', color: '#60a5fa', element: '水', baseHp: 190, baseAtk: 24 },
-{ no: '013', stage: 3, id: 'WATER_3', name: '怒濤獸', color: '#3b82f6', element: '水', baseHp: 450, baseAtk: 48 },
-{ no: '014', stage: 4, id: 'WATER_4', name: '海之主', color: '#2563eb', element: '水', baseHp: 950, baseAtk: 100 },
-{ no: '015', stage: 5, id: 'WATER_5', name: '利維坦', color: '#1d4ed8', element: '水', baseHp: 2200, baseAtk: 260 }
-],
-'GRASS': [
-{ no: '021', stage: 1, id: 'GRASS_1', name: '嫩芽種', color: '#86efac', element: '草', baseHp: 55, baseAtk: 12 },
-{ no: '022', stage: 2, id: 'GRASS_2', name: '藤蔓貓', color: '#4ade80', element: '草', baseHp: 160, baseAtk: 28 },
-{ no: '023', stage: 3, id: 'GRASS_3', name: '翠靈豹', color: '#22c55e', element: '草', baseHp: 350, baseAtk: 58 },
-{ no: '024', stage: 4, id: 'GRASS_4', name: '古樹魂', color: '#16a34a', element: '草', baseHp: 850, baseAtk: 115 },
-{ no: '025', stage: 5, id: 'GRASS_5', name: '世界樹', color: '#15803d', element: '草', baseHp: 1800, baseAtk: 300 }
-],
-'SHADOW': [
-{ no: '099', stage: 2, id: 'SHADOW_2', name: '幽影苗', color: '#4c1d95', element: '影', baseHp: 200, baseAtk: 50 },
-{ no: '100', stage: 3, id: 'SHADOW_3', name: '虛空行者', color: '#2e1065', element: '影', baseHp: 500, baseAtk: 110 },
-{ no: '101', stage: 4, id: 'SHADOW_4', name: '裂隙之王', color: '#1e1b4b', element: '影', baseHp: 1200, baseAtk: 250 },
-{ no: '102', stage: 5, id: 'SHADOW_5', name: '終焉之噬', color: '#020617', element: '影', baseHp: 3000, baseAtk: 600 }
-]
-};
-
 const SCENES = [
 { id: 'grassland', name: '翠綠草原', minLv: 1, maxLv: 10, bgColor: 'bg-[#f0f9eb]', groundColor: 'bg-[#a7d08c]', icon: Wind,
 accent: 'text-green-600' },
@@ -83,7 +81,14 @@ accent: 'text-purple-700' },
 
 // --- 2. 寵物渲染組件 ---
 
-const PixelPet = ({ type, stage = 1, color = "#ccc", size = 120, isEgg = false }) => {
+const PixelPet = ({ type, stage = 0, variant = 'A', color = "#ccc", size = 120, isEgg = false, imageName }) => {
+
+let finalImageName = imageName;
+if (!finalImageName && !isEgg && PET_DATABASE[type]) {
+  const meta = PET_DATABASE[type].find(p => p.stage === stage && p.variant === variant);
+  if (meta && meta.imageName) finalImageName = meta.imageName;
+}
+
 const colors = useMemo(() => {
 const brighten = (hex, amt) => {
 let r = parseInt(hex.slice(1, 3), 16) + amt;
@@ -110,6 +115,23 @@ return (
     </svg>
 </div>
 );
+}
+
+if (finalImageName) {
+  return (
+    <div className="flex items-center justify-center pointer-events-none drop-shadow-xl" 
+         style={{ width: size, height: size, filter: "drop-shadow(2px 4px 6px rgba(0,0,0,0.3))" }}>
+      <svg width="0" height="0">
+        <filter id="chromaKey">
+          <feColorMatrix in="SourceGraphic" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0.5 -1.5 0.5 0 1" result="matrixOut" />
+          <feComposite in="matrixOut" in2="SourceGraphic" operator="in" />
+        </filter>
+      </svg>
+      <img src={`/pets/${finalImageName}.png`} 
+           style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'url(#chromaKey)', imageRendering: 'pixelated' }} 
+           alt={type} />
+    </div>
+  );
 }
 
 const s = Math.max(1, stage);
@@ -156,7 +178,6 @@ return (
 // --- 3. 主應用程序 ---
 
 export default function App() {
-const [db, setDb] = useState(null);
 const [userId, setUserId] = useState(null);
 const [userData, setUserData] = useState(null);
 const [currentTab, setCurrentTab] = useState('home');
@@ -179,8 +200,16 @@ const effectiveStats = useMemo(() => {
 if (!userData?.pet) return { atk: 0, hp: 0, baseAtk: 0, baseHp: 0, bonusAtk: 0, bonusHp: 0, dodge: 0, clickMult: 1,
 idleMult: 1, waitBonus: 0, extraSkills: 0, extraCounters: 0 };
 const p = userData.pet;
-let baseAtk = p.atk || 0;
-let baseHp = p.maxHp || 0;
+
+let variantMultAtk = 1.0;
+let variantMultHp = 1.0;
+if (p.variant === 'B') { variantMultHp = 0.9; variantMultAtk = 1.35; }
+else if (p.variant === 'C') { variantMultHp = 1.2; variantMultAtk = 1.6; }
+else if (p.variant === 'D') { variantMultHp = 1.6; variantMultAtk = 2.2; }
+else if (p.variant === 'E') { variantMultHp = 2.5; variantMultAtk = 3.5; }
+
+let baseAtk = Math.floor((p.atk || 0) * variantMultAtk);
+let baseHp = Math.floor((p.maxHp || 0) * variantMultHp);
 let flatAtk = 0; let multAtk = 1; let flatHp = 0; let multHp = 1;
 let dodge = 0; let clickMult = 1; let idleMult = 1; let waitBonus = 0;
 let extraSkills = 0; let extraCounters = 0;
@@ -200,8 +229,8 @@ if (item.extraSkills) extraSkills += item.extraSkills;
 if (item.extraCounters) extraCounters += item.extraCounters;
 });
 
-const finalAtk = (baseAtk + flatAtk) * multAtk;
-const finalHp = (baseHp + flatHp) * multHp;
+const finalAtk = Math.floor((baseAtk + flatAtk) * multAtk);
+const finalHp = Math.floor((baseHp + flatHp) * multHp);
 
 return {
 atk: finalAtk,
@@ -218,55 +247,78 @@ const isWorldMoving = useMemo(() => {
 return !battleState && !matching && !offlineReward && !chestReward && !evolutionPending && currentTab === 'home';
 }, [battleState, matching, offlineReward, chestReward, evolutionPending, currentTab]);
 
+// --- Firebase 模式：初始化 ---
 useEffect(() => {
-setLogLevel('error');
-if (typeof __firebase_config === 'undefined') return;
-const config = JSON.parse(__firebase_config);
-const app = initializeApp(config);
-const fs = getFirestore(app);
-setDb(fs);
-const auth = getAuth(app);
-const handleSignIn = async () => {
-if (typeof __initial_auth_token !== 'undefined') { await signInWithCustomToken(auth, __initial_auth_token); }
-else { await signInAnonymously(auth); }
-};
-handleSignIn();
-return onAuthStateChanged(auth, u => u && setUserId(u.uid));
+  if (!fbInitialized) {
+    // LocalStorage 模式
+    setUserId('local-user');
+    const saved = lsLoad();
+    const defaultData = { uid: 'local-user', coins: 1000, collection: [], inventory: [], lastActiveTime: Date.now(), pet: null, dailyWins: 0, dailyLosses: 0, lastResetDate: new Date().toLocaleDateString(), battleHistory: [] };
+    const data = saved || defaultData;
+    if (!data.collection) data.collection = [];
+    if (!data.inventory) data.inventory = [];
+    if (!data.battleHistory) data.battleHistory = [];
+    if (!saved) lsSave(data);
+    // 檢查離線獎勵
+    if (data.pet && data.pet.level > 1 && data.pet.state !== 'EGG' && data.lastActiveTime) {
+      const elapsedSec = Math.floor((Date.now() - data.lastActiveTime) / 1000);
+      if (elapsedSec > 10) {
+        const cappedSec = Math.min(elapsedSec, 3600);
+        let idleBonus = 1;
+        data.pet?.equipment?.forEach(id => { if (ITEM_DB[id]?.idleMult) idleBonus += ITEM_DB[id].idleMult; });
+        const incomePerCycle = Math.floor(20 * Math.pow(data.pet.level, 1.1) * idleBonus);
+        const totalGain = Math.floor(cappedSec / 3) * incomePerCycle;
+        if (totalGain > 0) { setOfflineReward({ coins: totalGain, minutes: Math.floor(cappedSec / 60), seconds: cappedSec % 60 }); }
+      }
+    }
+    setUserData(data);
+    return;
+  }
+  // Firebase 模式
+  (async () => {
+    const { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = await import('firebase/auth');
+    const auth = getAuth(firebaseApp);
+    if (typeof __initial_auth_token !== 'undefined') { await signInWithCustomToken(auth, __initial_auth_token); }
+    else { await signInAnonymously(auth); }
+    onAuthStateChanged(auth, u => u && setUserId(u.uid));
+  })();
 }, []);
 
+// --- Firebase 模式：監聽用戶資料 ---
 useEffect(() => {
-if (!userId || !db) return;
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'pet-v6-book';
-const ref = doc(db, 'artifacts', appId, 'users', userId, 'data', 'profile');
-let isInitialLoad = true;
-return onSnapshot(ref, s => {
-if (s.exists()) {
-const data = s.data();
-if(!data.collection) data.collection = [];
-if(!data.inventory) data.inventory = [];
-if(!data.battleHistory) data.battleHistory = [];
-const today = new Date().toLocaleDateString();
-if (data.lastResetDate !== today) { updateData({ dailyWins: 0, dailyLosses: 0, lastResetDate: today }); }
-if (isInitialLoad && data.pet && data.pet.level > 1 && data.pet.state !== 'EGG' && data.lastActiveTime) {
-const elapsedSec = Math.floor((Date.now() - data.lastActiveTime) / 1000);
-if (elapsedSec > 10) {
-const cappedSec = Math.min(elapsedSec, 3600);
-let idleBonus = 1;
-data.pet.equipment?.forEach(id => { if(ITEM_DB[id]?.idleMult) idleBonus += ITEM_DB[id].idleMult; });
-const incomePerCycle = Math.floor(20 * Math.pow(data.pet.level, 1.1) * idleBonus);
-const totalGain = Math.floor(cappedSec / 3) * incomePerCycle;
-if (totalGain > 0) { setOfflineReward({ coins: totalGain, minutes: Math.floor(cappedSec / 60), seconds: cappedSec % 60
-}); }
-}
-isInitialLoad = false;
-}
-setUserData(data);
-} else {
-setDoc(ref, { uid: userId, coins: 1000, collection: [], inventory: [], lastActiveTime: Date.now(), pet: null, dailyWins:
-0, dailyLosses: 0, lastResetDate: new Date().toLocaleDateString(), battleHistory: [] });
-}
-});
-}, [userId, db]);
+  if (!fbInitialized || !userId || !firebaseDb) return;
+  (async () => {
+    const { doc, setDoc, onSnapshot } = await import('firebase/firestore');
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'pet-v6-book';
+    const ref = doc(firebaseDb, 'artifacts', appId, 'users', userId, 'data', 'profile');
+    let isInitialLoad = true;
+    onSnapshot(ref, s => {
+      if (s.exists()) {
+        const data = s.data();
+        if (!data.collection) data.collection = [];
+        if (!data.inventory) data.inventory = [];
+        if (!data.battleHistory) data.battleHistory = [];
+        const today = new Date().toLocaleDateString();
+        if (data.lastResetDate !== today) { updateData({ dailyWins: 0, dailyLosses: 0, lastResetDate: today }); }
+        if (isInitialLoad && data.pet && data.pet.level > 1 && data.pet.state !== 'EGG' && data.lastActiveTime) {
+          const elapsedSec = Math.floor((Date.now() - data.lastActiveTime) / 1000);
+          if (elapsedSec > 10) {
+            const cappedSec = Math.min(elapsedSec, 3600);
+            let idleBonus = 1;
+            data.pet.equipment?.forEach(id => { if (ITEM_DB[id]?.idleMult) idleBonus += ITEM_DB[id].idleMult; });
+            const incomePerCycle = Math.floor(20 * Math.pow(data.pet.level, 1.1) * idleBonus);
+            const totalGain = Math.floor(cappedSec / 3) * incomePerCycle;
+            if (totalGain > 0) { setOfflineReward({ coins: totalGain, minutes: Math.floor(cappedSec / 60), seconds: cappedSec % 60 }); }
+          }
+          isInitialLoad = false;
+        }
+        setUserData(data);
+      } else {
+        setDoc(ref, { uid: userId, coins: 1000, collection: [], inventory: [], lastActiveTime: Date.now(), pet: null, dailyWins: 0, dailyLosses: 0, lastResetDate: new Date().toLocaleDateString(), battleHistory: [] });
+      }
+    });
+  })();
+}, [userId]);
 
 const currentScene = useMemo(() => {
 const lv = userData?.pet?.level || 1;
@@ -293,39 +345,78 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
             currentTab, effectiveStats.idleMult]);
 
             const updateData = async (f) => {
-            if(!userData || !db) return;
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'pet-v6-book';
-            await setDoc(doc(db, 'artifacts', appId, 'users', userId, 'data', 'profile'), { ...userData, ...f });
+            if(!userData) return;
+            const merged = { ...userData, ...f };
+            if (fbInitialized && firebaseDb) {
+              const { doc, setDoc } = await import('firebase/firestore');
+              const appId = typeof __app_id !== 'undefined' ? __app_id : 'pet-v6-book';
+              await setDoc(doc(firebaseDb, 'artifacts', appId, 'users', userId, 'data', 'profile'), merged);
+            } else {
+              lsSave(merged);
+              setUserData(merged);
+            }
             };
 
             const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
             const triggerEvent = () => { setActiveEvent({ type: Math.random() > 0.4 ? 'ENCOUNTER' : 'TREASURE', id:
             Date.now() }); };
-            const getTrainCost = (lv) => Math.floor((lv <= 20 ? 0.5 : 1) * 100 * Math.pow(lv, 1.7)); const
-                checkEvolution=(p)=> {
+            const getTrainCost = (lv) => Math.floor((lv <= 20 ? 0.5 : 1) * 100 * Math.pow(lv, 1.7));
+            
+            const checkEvolution=(p)=> {
                 const nextLevel = p.level;
-                if (p.line === 'NEUTRAL' && nextLevel >= 11) {
-                const roll = Math.random();
-                let newLine = roll < 0.1 ? 'SHADOW' : roll < 0.4 ? 'FIRE' : roll < 0.7 ? 'WATER' : 'GRASS' ;
-                    setEvolutionPending({ ...PET_DATABASE[newLine].find(item=> item.stage === 2), newLine });
+                const nextStage = Math.floor((nextLevel - 1) / 10);
+                
+                if (nextStage > p.stage && nextStage <= 5) {
+                    if (p.stage === 0) {
+                        // 0階 -> 1階 (覺醒屬性)
+                        const roll = Math.random();
+                        let newLine = roll < 0.1 ? 'SHADOW' : roll < 0.4 ? 'FIRE' : roll < 0.7 ? 'WATER' : 'GRASS';
+                        const target = PET_DATABASE[newLine].find(item => item.stage === 1 && item.variant === 'A');
+                        if (target) setEvolutionPending({ ...target, newLine });
                     } else {
-                    const nextStage = Math.floor((nextLevel - 1) / 10) + 1;
-                    if (nextStage > p.stage && nextStage <= 5 && p.line !=='NEUTRAL' ) { const
-                        target=PET_DATABASE[p.line].find(item=> item.stage === nextStage);
-                        if (target) setEvolutionPending(target);
+                        // 1階以上進化，根據 70/30 機率樹分支
+                        const roll = Math.random();
+                        let nextVariant = 'A';
+                        const currentV = p.variant || 'A';
+                        
+                        if (currentV === 'A') {
+                            nextVariant = roll < 0.3 ? 'B' : 'A';
+                        } else if (currentV === 'B') {
+                            nextVariant = roll < 0.3 ? 'C' : 'B';
+                        } else if (currentV === 'C') {
+                            nextVariant = roll < 0.3 ? 'D' : 'C';
+                        } else if (currentV === 'D') {
+                            nextVariant = roll < 0.3 ? 'E' : 'D';
+                        } else {
+                            nextVariant = 'E'; // E 型態無法繼續突變
                         }
+                        
+                        // 檢查該屬系該階層是否有對應變異型態 (避免越界，例如第一階只有 A)
+                        let target = PET_DATABASE[p.line].find(item => item.stage === nextStage && item.variant === nextVariant);
+                        // 如果沒有對應變異型（保險機制），降級尋回前一個 variant
+                        if (!target && nextVariant > 'A') {
+                           target = PET_DATABASE[p.line].find(item => item.stage === nextStage && item.variant <= nextVariant);
                         }
-                        };
+                        if (!target) target = PET_DATABASE[p.line].find(item => item.stage === nextStage);
+                        
+                        if (target) setEvolutionPending({ ...target, newLine: p.line });
+                    }
+                }
+            };
 
-                        const hatch = () => updateData({ pet: { state: 'EGG', clicksLeft: 4, level: 1, name: '神祕的蛋',
-                        line: 'NEUTRAL' } });
+                        const hatch = () => {
+                          const b = PET_DATABASE['NEUTRAL'][0];
+                          updateData({ pet: { state: 'EGG', clicksLeft: 4, level: 1, name: '神祕的蛋', line: 'NEUTRAL', variant: 'A' } });
+                        };
 
                         const handlePetClick = (e) => {
                         if (!userData?.pet) return;
                         if (userData.pet.state === 'EGG') {
                         const nextClicks = userData.pet.clicksLeft - 1;
-                        if (nextClicks <= 0) { const b=PET_DATABASE['NEUTRAL'][0]; updateData({ pet: { line: 'NEUTRAL' ,
-                            level: 1, exp: 0, stage: 1, name: b.name, color: b.color, hp: b.baseHp, maxHp: b.baseHp,
+                        if (nextClicks <= 0) { 
+                            const b = PET_DATABASE['NEUTRAL'][0]; 
+                            updateData({ pet: { line: 'NEUTRAL' ,
+                            level: 1, exp: 0, stage: 0, variant: 'A', name: b.name, color: b.color, hp: b.baseHp, maxHp: b.baseHp,
                             atk: b.baseAtk, equipment: [null, null, null], state: 'ALIVE' }, collection: [...new
                             Set([...(userData.collection || []), b.id])] }); showToast("新生命誕生！"); } else { updateData({
                             pet: { ...userData.pet, clicksLeft: nextClicks } }); showToast(["", "就要破殼了！" , "有裂痕了！"
@@ -352,73 +443,251 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
                             if (Math.random() < 0.3) { const keys=Object.keys(ITEM_DB); setChestReward({ type: 'ITEM' ,
                                 itemId: keys[Math.floor(Math.random() * keys.length)] }); } else { setChestReward({
                                 type: 'GOLD' , amount: Math.floor((cost * (5 + Math.random() * 5)) / 10) * 10 }); } } };
-                                const startBattle=(type)=> {
-                                const p = userData.pet; setBattleType(type);
-                                setBattleState({
-                                me: { ...p, curHp: effectiveStats.hp, maxHp: effectiveStats.hp, atk: effectiveStats.atk,
-                                skillsLeft: 2 + effectiveStats.extraSkills, countersLeft: 2 +
-                                effectiveStats.extraCounters },
-                                opp: { name: type === 'BLUETOOTH' ? '藍牙挑戰者' : type === 'RANDOM' ? '隨機路人' : '野外怪物',
-                                level: p.level + (type === 'BLUETOOTH' ? 2 : 0), curHp: (effectiveStats.hp * 0.8) *
-                                (type === 'BLUETOOTH' ? 1.5 : 1), maxHp: (effectiveStats.hp * 0.8) * (type ===
-                                'BLUETOOTH' ? 1.5 : 1), atk: effectiveStats.atk * (type === 'BLUETOOTH' ? 0.9 : 0.7),
-                                color: type === 'BLUETOOTH' ? '#818cf8' : type === 'ENCOUNTER' ? '#ef4444' : '#94a3b8',
-                                type: ['FIRE','WATER','GRASS'][Math.floor(Math.random()*3)] },
-                                logs: [`${type === 'BLUETOOTH' ? '藍牙' : type === 'ENCOUNTER' ? '野外' : '隨機'}戰鬥開始！`],
-                                turn: 'me', finished: false, result: null
-                                });
-                                setVictoryMessage("");
-                                };
+                                
+  
 
-                                const battleAction = (mode = "NORMAL") => {
-                                if (battleState.turn !== 'me' || battleState.finished) return;
-                                let newLogs = [...battleState.logs]; let newOppHp = battleState.opp.curHp; let meStance
-                                = "NONE";
-                                if (mode === "SKILL") {
-                                if (battleState.me.skillsLeft <= 0) return showToast("技能次數已耗盡！"); const
-                                    dmg=Math.floor(battleState.me.atk * 1.5 * (0.9 + Math.random() * 0.2));
-                                    newOppHp=Math.max(0, newOppHp - dmg); newLogs.push(`使用技能造成 ${dmg} 傷害`);
-                                    setBattleState(s=> ({ ...s, me: { ...s.me, skillsLeft: s.me.skillsLeft - 1 } }));
-                                    } else if (mode === "COUNTER") {
-                                    if (battleState.me.countersLeft <= 0) return showToast("反擊次數已耗盡！");
-                                        meStance="COUNTER" ; newLogs.push(`進入反擊架式...`); setBattleState(s=> ({ ...s, me:
-                                        { ...s.me, countersLeft: s.me.countersLeft - 1 } }));
-                                        } else {
-                                        const dmg = Math.floor(battleState.me.atk * (0.9 + Math.random() * 0.2));
-                                        newOppHp = Math.max(0, newOppHp - dmg); newLogs.push(`發動普通攻擊造成 ${dmg} 傷害`);
-                                        }
-                                        if (newOppHp <= 0) { handleBattleEnd(true, newLogs); return; }
-                                            setBattleState(s=> ({ ...s, opp: { ...s.opp, curHp: newOppHp }, logs:
-                                            newLogs, turn: 'opp' }));
-                                            setTimeout(() => {
-                                            setBattleState(current => {
-                                            if (!current || current.finished) return current;
-                                            const oppLogs = [...current.logs];
-                                            if (Math.random() < effectiveStats.dodge) { oppLogs.push(`對手發動攻擊...
-                                                被你巧妙閃避了！`); return { ...current, logs: oppLogs, turn: 'me' }; } const
-                                                isOppSkill=Math.random() < 0.4; const botDmg=Math.floor(current.opp.atk
-                                                * (isOppSkill ? 1.4 : 1) * (0.8 + Math.random() * 0.4)); let
-                                                playerFinalHp=current.me.curHp; let opponentFinalHp=current.opp.curHp;
-                                                if (meStance==="COUNTER" ) { if (isOppSkill) {
-                                                oppLogs.push(`對手使用技能！反擊成功！對手遭受 ${current.me.atk} 反震傷害`);
-                                                opponentFinalHp=Math.max(0, opponentFinalHp - current.me.atk); } else {
-                                                oppLogs.push(`對手發動普攻...反擊無效！遭受 ${botDmg} 傷害`); playerFinalHp=Math.max(0,
-                                                playerFinalHp - botDmg); } } else { oppLogs.push(`對手發動${isOppSkill
-                                                ? '技能' : '攻擊' }造成 ${botDmg} 傷害`); playerFinalHp=Math.max(0,
-                                                playerFinalHp - botDmg); } if (opponentFinalHp <=0) { setTimeout(()=>
-                                                handleBattleEnd(true, oppLogs), 100); return { ...current, opp: {
-                                                ...current.opp, curHp: 0 }, logs: oppLogs }; }
-                                                else if (playerFinalHp <= 0) { setTimeout(()=> handleBattleEnd(false,
-                                                    oppLogs), 100); return { ...current, me: { ...current.me, curHp: 0
-                                                    }, logs: oppLogs }; }
-                                                    else { return { ...current, me: { ...current.me, curHp:
-                                                    playerFinalHp }, opp: { ...current.opp, curHp: opponentFinalHp },
-                                                    logs: oppLogs, turn: 'me' }; }
-                                                    });
-                                                    }, 800);
-                                                    };
+  const processStatuses = (pet, logs) => {
+    let hp = pet.curHp;
+    let newStatus = [];
+    (pet.status || []).forEach(s => {
+      if (s.type === 'IGNITE') {
+        hp -= s.value;
+        logs.push(`${pet.name || '你'} 受到 ${s.value} 點燃燒傷害！`);
+      }
+      if (s.duration > 1) {
+        newStatus.push({ ...s, duration: s.duration - 1 });
+      } else {
+        logs.push(`${pet.name || '你'} 的 ${s.type === 'IGNITE' ? '點燃' : s.type === 'CHILL' ? '遲緩' : s.type} 狀態解除了。`);
+      }
+    });
+    return { ...pet, curHp: Math.max(0, hp), status: newStatus };
+  };
 
-                                                    const handleBattleEnd = (isWin, currentLogs) => {
+  const startBattle = (type) => {
+    const p = userData.pet;
+    setBattleType(type);
+    
+    const myVar = getVariantMultiplier(p.variant || 'A');
+    const myShield = myVar.shieldBonus ? Math.floor(effectiveStats.hp * myVar.shieldBonus) : 0;
+    
+    const oppElements = ['FIRE', 'WATER', 'GRASS', 'SHADOW'];
+    const oppType = oppElements[Math.floor(Math.random() * oppElements.length)];
+    const oppVariants = ['A', 'B'];
+    const oppVar = oppVariants[Math.floor(Math.random() * oppVariants.length)];
+    const oppMod = getVariantMultiplier(oppVar);
+    
+    const isBluetooth = type === 'BLUETOOTH';
+    const oppBaseHp = effectiveStats.hp * 0.8 * (isBluetooth ? 1.5 : 1);
+    const oppBaseAtk = effectiveStats.atk * (isBluetooth ? 0.9 : 0.7);
+    
+    setBattleState({
+      me: {
+        ...p,
+        line: p.line || p.type,
+        curHp: effectiveStats.hp,
+        maxHp: effectiveStats.hp,
+        atk: effectiveStats.atk,
+        skillsLeft: 2 + effectiveStats.extraSkills,
+        countersLeft: 2 + effectiveStats.extraCounters,
+        status: [],
+        shield: myShield
+      },
+      opp: {
+        name: isBluetooth ? '藍牙挑戰者' : type === 'RANDOM' ? '隨機路人' : '野外怪物',
+        level: p.level + (isBluetooth ? 2 : 0),
+        line: oppType,
+        type: oppType,
+        curHp: oppBaseHp,
+        maxHp: oppBaseHp,
+        atk: oppBaseAtk,
+        color: isBluetooth ? '#818cf8' : type === 'ENCOUNTER' ? '#ef4444' : '#94a3b8',
+        variant: oppVar,
+        status: [],
+        shield: 0
+      },
+      logs: [`${isBluetooth ? '藍牙' : type === 'ENCOUNTER' ? '野外' : '隨機'}戰鬥開始！`, myShield > 0 ? `護盾啟動！吸收 ${myShield} 點傷害。` : null].filter(Boolean),
+      turn: 'me',
+      finished: false,
+      result: null
+    });
+    setVictoryMessage("");
+  };
+
+  const calculateDamageAndStatus = (attacker, defender, isSkill, logs) => {
+    const varMod = getVariantMultiplier(attacker.variant || 'A');
+    const mult = isSkill ? varMod.skill : (0.9 + Math.random() * 0.2);
+    
+    const isChilled = (attacker.status || []).some(s => s.type === 'CHILL');
+    const chillMod = isChilled ? 0.75 : 1.0;
+    
+    const baseDmg = Math.floor(attacker.atk * mult * chillMod);
+    let finalDmg = baseDmg;
+    
+    let defShield = defender.shield || 0;
+    if (defShield > 0) {
+      if (finalDmg >= defShield) {
+        logs.push(`${defender.name || '對手'} 的護盾被擊破了！`);
+        finalDmg -= defShield;
+        defShield = 0;
+      } else {
+        defShield -= finalDmg;
+        logs.push(`${defender.name || '對手'} 的護盾吸收了 ${finalDmg} 傷害！`);
+        finalDmg = 0;
+      }
+    }
+    
+    let newDefStatus = [...(defender.status || [])];
+    let lifesteal = 0;
+    let dodgeBuff = false;
+    
+    const baseChance = isSkill ? 0.3 : varMod.autoStatus;
+    const triggerChance = baseChance * varMod.statusMod;
+    
+    if (finalDmg > 0 && Math.random() < triggerChance) {
+      const line = attacker.line || attacker.type;
+      if (line === 'FIRE') {
+        const dot = Math.floor(attacker.atk * 0.3);
+        const exists = newDefStatus.find(s => s.type === 'IGNITE');
+        if (exists) exists.duration = 2;
+        else newDefStatus.push({ type: 'IGNITE', duration: 2, value: dot });
+        logs.push(`${defender.name || '對手'} 受到點燃！`);
+      } else if (line === 'WATER') {
+        const exists = newDefStatus.find(s => s.type === 'CHILL');
+        if (exists) exists.duration = 2;
+        else newDefStatus.push({ type: 'CHILL', duration: 2 });
+        logs.push(`${defender.name || '對手'} 受到遲緩！`);
+      } else if (line === 'GRASS') {
+        lifesteal = Math.floor(finalDmg * 0.3);
+        logs.push(`寄生吸取了 ${lifesteal} 點生命！`);
+      }
+    }
+    
+    if ((attacker.line || attacker.type) === 'SHADOW') {
+        if (Math.random() < (isSkill ? 0.4 : 0.1)) {
+            dodgeBuff = true;
+            logs.push(`${attacker.name || '我方'} 隱入暗影，閃避率大幅提升！`);
+        }
+    }
+    
+    return { dmg: finalDmg, newDefShield: defShield, newDefStatus, lifesteal, dodgeBuff };
+  };
+
+  const battleAction = (mode = "NORMAL") => {
+    if (battleState.turn !== 'me' || battleState.finished) return;
+    
+    let logs = [...battleState.logs];
+    
+    let meState = processStatuses(battleState.me, logs);
+    if (meState.curHp <= 0) {
+      setBattleState(s => ({ ...s, me: meState, logs }));
+      handleBattleEnd(false, logs);
+      return;
+    }
+    
+    let oppState = { ...battleState.opp };
+    let meStance = "NONE";
+    let isSkill = false;
+    
+    if (mode === "SKILL") {
+      if (meState.skillsLeft <= 0) return showToast("技能次數已耗盡！");
+      meState.skillsLeft -= 1;
+      isSkill = true;
+      logs.push(`發動技能攻擊！`);
+    } else if (mode === "COUNTER") {
+      if (meState.countersLeft <= 0) return showToast("反擊次數已耗盡！");
+      meState.countersLeft -= 1;
+      meStance = "COUNTER";
+      logs.push(`進入反擊架式...`);
+    } else {
+      logs.push(`發動普通攻擊！`);
+    }
+    
+    let shieldBreak = false;
+    if (meStance !== "COUNTER") {
+      const res = calculateDamageAndStatus(meState, oppState, isSkill, logs);
+      oppState.shield = res.newDefShield;
+      if (res.dmg > 0) {
+         oppState.curHp = Math.max(0, oppState.curHp - res.dmg);
+         logs.push(`造成 ${res.dmg} 傷害！`);
+      }
+      oppState.status = res.newDefStatus;
+      if (res.lifesteal > 0) {
+         meState.curHp = Math.min(meState.maxHp, meState.curHp + res.lifesteal);
+      }
+      if (res.dodgeBuff) meState.shadowDodgeObj = true;
+    }
+    
+    if (oppState.curHp <= 0) {
+      setBattleState(s => ({ ...s, me: meState, opp: oppState, logs }));
+      handleBattleEnd(true, logs);
+      return;
+    }
+    
+    setBattleState(s => ({ ...s, me: meState, opp: oppState, logs, turn: 'opp' }));
+    
+    setTimeout(() => {
+      setBattleState(current => {
+        if (!current || current.finished) return current;
+        let cLogs = [...current.logs];
+        
+        let botState = processStatuses(current.opp, cLogs);
+        if (botState.curHp <= 0) {
+          setTimeout(() => handleBattleEnd(true, cLogs), 100);
+          return { ...current, opp: botState, logs: cLogs };
+        }
+        
+        let pState = { ...current.me };
+        
+        let finalDodgeRate = effectiveStats.dodge + (pState.shadowDodgeObj ? 0.5 : 0);
+        let variantEBonus = getVariantMultiplier(pState.variant || 'A').dodgeBonus || 0;
+        finalDodgeRate += variantEBonus;
+
+        if (Math.random() < finalDodgeRate) {
+          cLogs.push(`對手發動攻擊...被巧妙閃避了！`);
+          pState.shadowDodgeObj = false; 
+          return { ...current, me: pState, opp: botState, logs: cLogs, turn: 'me' };
+        }
+        
+        const isOppSkill = Math.random() < 0.4;
+        cLogs.push(`對手發動${isOppSkill ? '技能' : '攻擊'}！`);
+        
+        if (meStance === "COUNTER") {
+          if (isOppSkill) {
+            cLogs.push(`反擊成功！對手遭受 ${pState.atk} 反震傷害`);
+            botState.curHp = Math.max(0, botState.curHp - pState.atk);
+            if (botState.curHp <= 0) {
+               setTimeout(() => handleBattleEnd(true, cLogs), 100);
+               return { ...current, me: pState, opp: botState, logs: cLogs };
+            }
+            return { ...current, me: pState, opp: botState, logs: cLogs, turn: 'me' };
+          } else {
+            cLogs.push(`對手發動普攻...無法反擊！`);
+          }
+        }
+        
+        const botRes = calculateDamageAndStatus(botState, pState, isOppSkill, cLogs);
+        pState.shield = botRes.newDefShield;
+        if (botRes.dmg > 0) {
+           pState.curHp = Math.max(0, pState.curHp - botRes.dmg);
+           cLogs.push(`你受到了 ${botRes.dmg} 傷害！`);
+        }
+        pState.status = botRes.newDefStatus;
+        if (botRes.lifesteal > 0) {
+           botState.curHp = Math.min(botState.maxHp, botState.curHp + botRes.lifesteal);
+        }
+        
+        pState.shadowDodgeObj = false; 
+        
+        if (pState.curHp <= 0) {
+          setTimeout(() => handleBattleEnd(false, cLogs), 100);
+          return { ...current, me: pState, opp: botState, logs: cLogs };
+        }
+        
+        return { ...current, me: pState, opp: botState, logs: cLogs, turn: 'me' };
+      });
+    }, 800);
+  };
+const handleBattleEnd = (isWin, currentLogs) => {
                                                     const cost = getTrainCost(userData.pet.level);
                                                     let goldGain = 0; let updates = {};
                                                     if (battleType === 'BLUETOOTH') {
@@ -963,6 +1232,54 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
                                                                                 border-4 border-red-200">撕毀這本繪本</button>
                                                                         </div>
                                                                         )}
+
+                                                                        {currentTab === 'pokedex' && (
+                                                                        <div className="flex-1 overflow-y-auto p-6 space-y-6 animate-fade-in relative z-10 pb-32 hide-scrollbar">
+                                                                            <div className="flex items-center justify-between mb-2">
+                                                                                <h2 className="text-2xl font-black text-gray-800 flex items-center gap-3">
+                                                                                    <BookOpen className="text-blue-500" /> 神獸圖鑑
+                                                                                </h2>
+                                                                                <span className="text-sm font-bold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                                                                                    解鎖: {userData?.collection?.length || 0} / 61
+                                                                                </span>
+                                                                            </div>
+                                                                            
+                                                                            {Object.entries(PET_DATABASE).map(([elementKey, pets]) => (
+                                                                                <div key={elementKey} className="bg-white/80 backdrop-blur-sm rounded-3xl p-5 shadow-sm border-2 border-white">
+                                                                                    <h3 className={`text-lg font-bold mb-4 flex items-center gap-2 
+                                                                                        ${elementKey === 'FIRE' ? 'text-red-500' : elementKey === 'WATER' ? 'text-blue-500' : elementKey === 'GRASS' ? 'text-green-500' : elementKey === 'SHADOW' ? 'text-purple-500' : 'text-gray-500'}`}>
+                                                                                        {elementKey === 'NEUTRAL' ? '一般系' : elementKey === 'FIRE' ? '火系' : elementKey === 'WATER' ? '水系' : elementKey === 'GRASS' ? '草系' : '影系'}譜系
+                                                                                    </h3>
+                                                                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                                                                                        {pets.map(p => {
+                                                                                            const isUnlocked = userData?.collection?.includes(p.id);
+                                                                                            return (
+                                                                                                <div key={p.id} className={`relative flex flex-col items-center p-2 rounded-2xl border-2 transition-all
+                                                                                                    ${isUnlocked ? 'border-gray-200 bg-white shadow-sm' : 'border-dashed border-gray-300 bg-gray-50/50 opacity-60'}`}>
+                                                                                                    
+                                                                                                    <div className="absolute top-1 left-2 text-[10px] font-bold text-gray-400">{p.stage}階 {p.variant}</div>
+                                                                                                    {p.variant !== 'A' && (
+                                                                                                         <div className={`absolute top-1 right-2 w-2 h-2 rounded-full shadow-inner ${p.variant==='B'?'bg-blue-400':p.variant==='C'?'bg-purple-400':p.variant==='D'?'bg-orange-400':'bg-yellow-400'}`} />
+                                                                                                    )}
+                                                                                                    
+                                                                                                    <div className="w-16 h-16 flex items-center justify-center mb-1 mt-3">
+                                                                                                       {isUnlocked ? (
+                                                                                                           <PixelPet type={elementKey} stage={p.stage} variant={p.variant} color={p.color} size={60} imageName={p.imageName} />
+                                                                                                       ) : (
+                                                                                                           <div className="text-gray-300"><Search size={20}/></div>
+                                                                                                       )}
+                                                                                                    </div>
+                                                                                                    <span className={`text-[11px] font-bold text-center ${isUnlocked ? 'text-gray-700' : 'text-gray-400'}`}>
+                                                                                                        {isUnlocked ? p.name : '???'}
+                                                                                                    </span>
+                                                                                                </div>
+                                                                                            )
+                                                                                        })}
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                        )}
                                                                     </main>
 
                                                                     <nav
@@ -970,6 +1287,7 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
                                                                         {[ { id: 'home', icon: Home, label: '封面' }, {
                                                                         id: 'battle', icon: Swords, label: '戰鬥' }, { id:
                                                                         'inventory', icon: Package, label: '行囊' }, { id:
+                                                                        'pokedex', icon: BookOpen, label: '圖鑑' }, { id:
                                                                         'settings', icon: Settings, label: '配置'
                                                                         }].map(tab => (<button key={tab.id}
                                                                             onClick={()=> setCurrentTab(tab.id)}
@@ -1019,6 +1337,60 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
                                                                         </div>
                                                                         <p className="text-xs opacity-40 mt-4 italic">
                                                                             正在同步繪本世界線...</p>
+                                                                    </div>
+                                                                    )}
+
+                                                                    {evolutionPending && (
+                                                                    <div
+                                                                        className="absolute inset-0 z-[270] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
+                                                                        <div
+                                                                            className="bg-[#fdfaf5] w-full rounded-[3rem] p-10 border-[10px] border-[#604a32] shadow-2xl text-center flex flex-col items-center">
+                                                                            <div
+                                                                                className="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-6 border-4 border-[#d4a373] shadow-inner">
+                                                                                <Sparkles size={48}
+                                                                                    className="text-yellow-500 animate-spin" />
+                                                                            </div>
+                                                                            <h2
+                                                                                className="text-3xl font-bold italic mb-2 tracking-tighter text-[#604a32]">
+                                                                                進化！</h2>
+                                                                            <p
+                                                                                className="text-[#604a32]/60 text-sm mb-6 leading-relaxed font-bold">
+                                                                                你的夥伴正在蛻變...</p>
+                                                                            <div className="mb-6 transform scale-125">
+                                                                                <PixelPet
+                                                                                    stage={evolutionPending.stage}
+                                                                                    type={evolutionPending.newLine || userData?.pet?.line}
+                                                                                    color={evolutionPending.color}
+                                                                                    size={120} />
+                                                                            </div>
+                                                                            <div
+                                                                                className="bg-white border-4 border-[#faedcd] w-full py-4 rounded-3xl mb-6 flex flex-col items-center gap-1 shadow-inner">
+                                                                                <p className="text-2xl font-black text-[#604a32]">
+                                                                                    {evolutionPending.name}</p>
+                                                                                <p className="text-[10px] font-bold opacity-40 uppercase tracking-widest">
+                                                                                    階段 {evolutionPending.stage} · {evolutionPending.element || ''}</p>
+                                                                                <div className="flex gap-6 mt-2 text-sm font-bold">
+                                                                                    <span className="text-red-500">ATK {evolutionPending.baseAtk}</span>
+                                                                                    <span className="text-green-500">HP {evolutionPending.baseHp}</span>
+                                                                                </div>
+                                                                            </div>
+                                                                            <button onClick={() => {
+                                                                                const p = { ...userData.pet };
+                                                                                if (evolutionPending.newLine) p.line = evolutionPending.newLine;
+                                                                                p.stage = evolutionPending.stage;
+                                                                                p.name = evolutionPending.name;
+                                                                                p.color = evolutionPending.color;
+                                                                                p.maxHp = evolutionPending.baseHp;
+                                                                                p.hp = evolutionPending.baseHp;
+                                                                                p.atk = evolutionPending.baseAtk;
+                                                                                updateData({ pet: p, collection: [...new Set([...(userData.collection || []), evolutionPending.id])] });
+                                                                                setEvolutionPending(null);
+                                                                                showToast(`進化成功！${evolutionPending.name}`);
+                                                                            }}
+                                                                                className="w-full bg-[#604a32] text-white py-5 rounded-3xl font-bold shadow-xl active:scale-95 transition-transform uppercase tracking-widest">
+                                                                                確認進化
+                                                                            </button>
+                                                                        </div>
                                                                     </div>
                                                                     )}
 
@@ -1141,13 +1513,17 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
                                                                                         className="font-bold text-xs uppercase tracking-tighter">
                                                                                         {battleState.opp.name} ·
                                                                                         LV.{battleState.opp.level}</p>
-                                                                                    <div
-                                                                                        className="h-2.5 bg-black/10 rounded-full overflow-hidden border-2 border-white mt-1.5 shadow-inner">
-                                                                                        <div className="h-full bg-red-500 transition-all duration-700 shadow-sm"
-                                                                                            style={{ width:
-                                                                                            `${(battleState.opp.curHp/battleState.opp.maxHp)*100}%`
-                                                                                            }}></div>
-                                                                                    </div>
+                                                                                    <div className="h-2.5 w-full bg-black/10 rounded-full overflow-hidden border-2 border-white mt-1.5 shadow-inner">
+          <div className="h-full bg-red-500 transition-all duration-700 shadow-sm" style={{ width: `${Math.max(0, (battleState.opp.curHp/battleState.opp.maxHp)*100)}%` }}></div>
+    </div>
+    <div className="flex justify-end gap-1 mt-1 flex-wrap">
+        {battleState.opp.shield > 0 && <span className="bg-blue-100/80 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-bold border border-blue-200 shadow-sm">🛡️ {battleState.opp.shield}</span>}
+        {(battleState.opp.status || []).map((s, idx) => (
+            <span key={idx} className={`text-[10px] px-1.5 py-0.5 rounded font-bold border shadow-sm ${s.type === 'IGNITE' ? 'bg-red-100/80 text-red-600 border-red-200' : s.type === 'CHILL' ? 'bg-cyan-100/80 text-cyan-600 border-cyan-200' : 'bg-gray-100 text-gray-600'}`}>
+                {s.type === 'IGNITE' ? '🔥' : s.type === 'CHILL' ? '❄️' : '⚠️'} {s.duration}回合
+            </span>
+        ))}
+    </div>
                                                                                 </div>
                                                                             </div>
                                                                             <div
@@ -1176,13 +1552,18 @@ return SCENES.find(s => lv >= s.minLv && lv <= s.maxLv) || SCENES[0]; }, [userDa
                                                                                     <p
                                                                                         className="font-bold text-sm uppercase tracking-widest text-[#604a32]">
                                                                                         {userData.pet.name}</p>
-                                                                                    <div
-                                                                                        className="h-2.5 bg-black/10 rounded-full overflow-hidden mt-1.5 border-2 border-white shadow-inner">
-                                                                                        <div className="h-full bg-blue-500 transition-all duration-700"
-                                                                                            style={{ width:
-                                                                                            `${(battleState.me.curHp/battleState.me.maxHp)*100}%`
-                                                                                            }}></div>
-                                                                                    </div>
+                                                                                    <div className="h-2.5 w-full bg-black/10 rounded-full overflow-hidden mt-1.5 border-2 border-white shadow-inner">
+        <div className="h-full bg-blue-500 transition-all duration-700" style={{ width: `${Math.max(0, (battleState.me.curHp/battleState.me.maxHp)*100)}%` }}></div>
+    </div>
+    <div className="flex justify-start gap-1 mt-1 flex-wrap">
+        {battleState.me.shield > 0 && <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-bold border border-blue-200 shadow-sm">🛡️ {battleState.me.shield}</span>}
+        {battleState.me.shadowDodgeObj && <span className="bg-purple-100 text-purple-600 text-[10px] px-1.5 py-0.5 rounded font-bold border border-purple-200 shadow-sm">💨 潛伏</span>}
+        {(battleState.me.status || []).map((s, idx) => (
+            <span key={idx} className={`text-[10px] px-1.5 py-0.5 rounded font-bold border shadow-sm ${s.type === 'IGNITE' ? 'bg-red-100 text-red-600 border-red-200' : s.type === 'CHILL' ? 'bg-cyan-100 text-cyan-600 border-cyan-200' : 'bg-gray-100 text-gray-600'}`}>
+                {s.type === 'IGNITE' ? '🔥' : s.type === 'CHILL' ? '❄️' : '⚠️'} {s.duration}回合
+            </span>
+        ))}
+    </div>
                                                                                     <div
                                                                                         className="flex gap-4 mt-2 text-[10px] font-bold">
                                                                                         <span
